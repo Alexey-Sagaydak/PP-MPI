@@ -1,114 +1,80 @@
 #include <iostream>
 #include <cmath>
 #include <mpi.h>
+#include <iomanip>
 
-/*
-Что не так:
-Нужно чтобы нулевой процесс отправлял границы каждому процессу с помощью send,а процессы собирали
-бы их с помощью receive. В конце нулевой процесс собирал бы результаты с помощью reduce
-*/
+// mpiexec -np 3 .\MPI_Integration.exe 1 1000 1000000
 
-/*
-ИНСТРУКЦИЯ ПО ЗАПУСКУ:
-1) Открыть командную строку в директории с исполняемым файлом.
-2) Выполнить команду mpiexec -np X ./MPI-Integration.exe
-   X - желаемое число процессов
-*/
-
-double func(double x) {
+float func(float x) {
     return log(x);
 }
 
-double integrateSubInterval(double a, double b, int n) {
-    double h = (b - a) / n;
-    double localSum = 0.0;
+float rectangleMethod(float* x, int n) {
+    float estimate = 0.0;
 
-    for (int i = 1; i <= n; ++i) {
-        double x = a + (i - 0.5) * h;
-        localSum += func(x);
+    for (int i = 0; i < n; i++) {
+        float y = x[0] + (i + 0.5) * x[2];
+        estimate += func(y);
     }
+    estimate = estimate * x[2];
 
-    localSum *= h;
-
-    return localSum;
+    return estimate;
 }
 
-double parallelRectangleIntegration(double a, double b, int n, int rank, int size) {
-    double h = (b - a) / n;
-    double localSum = 0.0;
-
-    for (int i = rank + 1; i <= n; i += size) {
-        double x = a + (i - 0.5) * h;
-        localSum += func(x);
+int main(int argc, char** argv) {
+    if (argc != 4) {
+        std::cout << " You need to pass 3 parameters: a, b, n\n";
+        return 0;
     }
 
-    localSum *= h;
+    int my_rank, comm_sz, n = 1024, local_n;
+    double a = 0.0, b = 3.0, h, local_a, local_b;
+    double local_int, total_int = 0.0, z;
+    int source;
 
-    // Отправка границ другим процессам
-    for (int i = 0; i < size; ++i) {
-        if (i != rank) {
-            MPI_Send(&a, 1, MPI_DOUBLE, i, 0, MPI_COMM_WORLD);
-            MPI_Send(&b, 1, MPI_DOUBLE, i, 1, MPI_COMM_WORLD);
-        }
-    }
+    a = atof(argv[1]);
+    b = atof(argv[2]);
+    z = atof(argv[3]);
+    n = (int)z;
 
-    // Отправка локальной суммы нулевому процессу
-    if (rank != 0) {
-        MPI_Send(&localSum, 1, MPI_DOUBLE, 0, 2, MPI_COMM_WORLD);
-    }
-
-    return localSum;  // Процессы, отличные от нулевого, возвращают локальную сумму
-}
-
-int main() {
     MPI_Init(NULL, NULL);
-
-    int size, rank;
-    MPI_Comm_size(MPI_COMM_WORLD, &size);
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-
-    char processor_name[MPI_MAX_PROCESSOR_NAME];
-    int name_len;
-    MPI_Get_processor_name(processor_name, &name_len);
-
-    printf("**********\nSent from process %d running on processor %s.\n\
-        Number of processes is %d.\n\
-        ***********************\n",
-        rank, processor_name, size);
-
-    double a = 1, b = 500;
-    int n = 100000000;
-    double localSum = 0.0;
-    double totalSum = 0.0;
+    MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &comm_sz);
 
     double startTime = MPI_Wtime();
 
-    // Нулевой процесс получает локальную сумму и границы от других процессов
-    if (rank == 0) {
-        for (int i = 1; i < size; ++i) {
-            MPI_Recv(&localSum, 1, MPI_DOUBLE, i, 2, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            totalSum += localSum;
-        }
+    h = (b - a) / n;
+    local_n = n / comm_sz;
+
+    local_a = a + my_rank * local_n * h;
+    local_b = local_a + local_n * h;
+
+    float x[3];
+    x[0] = local_a;
+    x[1] = local_b;
+    x[2] = h;
+
+    local_int = rectangleMethod(x, local_n);
+
+    if (my_rank != 0) {
+        MPI_Send(&local_int, 1, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
     }
     else {
-        // Процессы, отличные от нулевого, получают границы и интегрируют свой подинтервал
-        MPI_Recv(&a, 1, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        MPI_Recv(&b, 1, MPI_DOUBLE, 0, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        localSum = parallelRectangleIntegration(a, b, n, rank, size);
+        total_int = local_int;
+        for (source = 1; source < comm_sz; source++) {
+            MPI_Recv(&local_int, 1, MPI_DOUBLE, source, 0, MPI_COMM_WORLD, MPI_STATUSES_IGNORE);
+            total_int += local_int;
+        }
     }
 
-    // Использование MPI_Reduce для получения окончательного результата
-    MPI_Reduce(&localSum, &totalSum, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-
-    double endTime = MPI_Wtime();
-
-    if (rank == 0) {
-        std::cout << "Integral value: " << totalSum << std::endl;
-        std::cout << "Total time: " << (endTime - startTime) * 1000 << " ms" << std::endl;
+    if (my_rank == 0) {
+        double endTime = MPI_Wtime();
+        std::cout << std::endl << "-------------------------------------";
+        std::cout << std::endl << " For n=" << n << " Rectangles from a=" << a << " to b=" << b;
+        std::cout << std::endl << " The Definite Integral Value is: " << std::fixed << std::setprecision(3) << total_int;
+        std::cout << std::endl << "Total time: " << (endTime - startTime) * 1000 << " ms" << std::endl;
     }
 
     MPI_Finalize();
-
     return 0;
 }
-
