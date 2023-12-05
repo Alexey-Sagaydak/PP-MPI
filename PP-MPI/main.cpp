@@ -56,17 +56,21 @@ int main(int argc, char** argv) {
 
     local_int = rectangleMethod(x, local_n);
 
+    std::cout << local_int << "\n";
+
+    // Если это не нулевой процесс
     if (my_rank != 0) {
         MPI_Send(&local_int, 1, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD);
     }
     else {
+        // в нулевом процессе считаем сумму
         total_int = local_int;
         for (source = 1; source < comm_sz; source++) {
             MPI_Recv(&local_int, 1, MPI_DOUBLE, source, 0, MPI_COMM_WORLD, MPI_STATUSES_IGNORE);
             total_int += local_int;
         }
     }
-
+    //MPI_Reduce(&local_int, &total_int, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
     if (my_rank == 0) {
         double endTime = MPI_Wtime();
         std::cout << std::endl << "-------------------------------------";

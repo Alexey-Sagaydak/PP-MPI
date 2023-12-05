@@ -45,6 +45,17 @@ int main(int argc, char** argv) {
 
     const int matrixSize = 4;  // Замените это значение на ваш размер матрицы
 
+    // Создание декартовой топологии
+    int dims[2] = { size, 1 };
+    int periods[2] = { 0, 0 };
+    int reorder = 0;
+    MPI_Comm cartComm;
+    MPI_Cart_create(MPI_COMM_WORLD, 2, dims, periods, reorder, &cartComm);
+
+    // Получение координат процесса в решетке
+    int coords[2];
+    MPI_Cart_coords(cartComm, rank, 2, coords);
+
     // Процесс с рангом 0 заполняет матрицу и вектор
     std::vector<std::vector<int>> matrix;
     std::vector<int> vector(matrixSize);
@@ -55,12 +66,12 @@ int main(int argc, char** argv) {
     }
 
     // Рассылка матрицы и вектора с использованием коллективных взаимодействий
-    MPI_Bcast(vector.data(), matrixSize, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(vector.data(), matrixSize, MPI_INT, 0, cartComm);
 
     if (rank == 0) {
         // Рассылка строк матрицы
         for (int i = 0; i < matrixSize; ++i) {
-            MPI_Bcast(matrix[i].data(), matrixSize, MPI_INT, 0, MPI_COMM_WORLD);
+            MPI_Bcast(matrix[i].data(), matrixSize, MPI_INT, 0, cartComm);
         }
     }
 
@@ -72,9 +83,13 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Сбор результатов с использованием декартовой топологии и коммуникатора строки решетки
+    // Сбор результатов с использованием коммуникатора строки решетки
+    MPI_Comm rowComm;
+    int remain_dims[2] = { 1, 0 };  // Оставляем только строки
+    MPI_Cart_sub(cartComm, remain_dims, &rowComm);
+
     std::vector<int> globalResult(matrixSize, 0);
-    MPI_Reduce(localResult.data(), globalResult.data(), matrixSize, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(localResult.data(), globalResult.data(), matrixSize, MPI_INT, MPI_SUM, 0, rowComm);
 
     // Вывод результатов на экран (может быть отключено для больших данных)
     if (rank == 0) {
@@ -87,6 +102,9 @@ int main(int argc, char** argv) {
         std::cout << "Result:" << std::endl;
         printVector(globalResult);
     }
+
+    MPI_Comm_free(&cartComm);
+    MPI_Comm_free(&rowComm);
 
     MPI_Finalize();
 
